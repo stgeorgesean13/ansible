@@ -1,0 +1,73 @@
+---
+- name: Media Gallery Deployment
+  hosts: localhost
+  become: yes  # Become a superuser (root) when executing tasks
+
+  # Specify that the connection should be local
+  connection: local
+
+  tasks:
+    # Task 1: Update and upgrade system packages
+    - name: Update and upgrade system packages
+      apt:
+        update_cache: yes  # Update the package cache
+        upgrade: dist  # Upgrade all packages to the latest version
+      tags:
+        - update
+
+    # Task 2: Install required system packages
+    - name: Install required system packages
+      apt:
+        name: "{{ item }}"  # Package name
+        state: present  # Ensure the package is installed
+      with_items:
+        - docker.io  # Docker
+        - docker-compose  # Docker Compose
+      tags:
+        - install
+
+    # Task 3: Create directories for Piwigo and MySQL data
+    - name: Create directories for Piwigo and MySQL data
+      file:
+        path: "{{ item }}"  # Directory path
+        state: directory  # Create a directory
+      with_items:
+        - /home/student/project2/piwigo
+        - /home/student/project2/mysql
+      tags:
+        - directories
+
+    # Task 4: Deploy Docker Compose file for Piwigo and MySQL
+    - name: Deploy Docker Compose file for Piwigo and MySQL
+      copy:
+        src: /home/student/project2/docker-compose.yml  # Source file
+        dest: /home/student/project2/docker-compose.yml  # Destination file
+      tags:
+        - docker-compose
+
+    # Task 5: Pull Piwigo and MySQL Docker images
+    - name: Pull Piwigo and MySQL Docker images
+      command: docker pull "{{ item }}"
+      with_items:
+        - linuxserver/piwigo:latest  # Piwigo Docker image
+        - mysql:latest  # MySQL Docker image
+      tags:
+        - docker-images
+
+    # Task 6: Start Docker containers for Piwigo and MySQL
+    - name: Start Docker containers for Piwigo and MySQL
+      command: docker-compose up -d
+      args:
+        chdir: /home/student/project2  # Change to the specified directory
+      tags:
+        - start-containers
+
+    # Task 7: Wait for Piwigo container to be healthy
+    - name: Wait for Piwigo container to be healthy
+      wait_for:
+        host: http://localhost:8080  # URL to check
+        state: started  # Wait until the URL is accessible
+        timeout: 300  # Maximum wait time in seconds
+      tags:
+        - wait-piwigo
+

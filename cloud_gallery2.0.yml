@@ -1,0 +1,200 @@
+---
+- name: Media Gallery Cloud Deployment
+  hosts: localhost
+  become: yes
+
+  tasks:
+    # Task 1: Gather instance metadata for your VM
+    - name: Gather VM instance metadata
+      gce_metadata:
+        instance_name: vmtest
+        zone: us-east1-b
+        project: tak-server-drone-project
+      register: vm_metadata
+
+    # Task 2: Use VM metadata to update and upgrade system packages on VM
+    - name: Update and upgrade system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+      tags:
+        - t2
+     
+
+    # Task 3: Use VM metadata to install essential packages 
+    - name: Install essential packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - software-properties-common
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - gnupg
+        - docker.io
+        - docker-compose
+      tags:
+        - t3
+
+
+    # Task 4: Use VM metadata to add correct Docker GPG key and repository
+    - name: Add Docker GPG key and repository
+      apt_key:
+        url: "{{ vm_metadata.instance_metadata.docker_gpg_key_url }}"
+        state: present
+      become: yes
+      tags:
+        - t4.1
+
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "{{ vm_metadata.instance_metadata.docker_repository }}"
+      become: yes
+      tags:
+        - t4.2
+
+
+    # Task 5: Use VM metadata to install Docker and Docker Compose
+    - name: Install Docker and Docker Compose
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - docker-ce
+        - docker-ce-cli
+      tags:
+        - t4
+
+
+    # Task 5.2: Ensure Docker and Docker Compose are up and running
+    - name: Ensure Docker and Docker Compose are up and running
+      become: yes
+      service:
+        name: "{{ item }}"
+        state: started
+      with_items:
+        - docker
+        - docker-compose
+      tags:
+        - t5.2
+
+    # Task 5.3: Check if Docker and Docker Compose are running properly (you can customize this as needed)
+    - name: Check if Docker and Docker Compose are running properly
+      command: docker --version && docker-compose --version
+      register: docker_versions
+      changed_when: false
+      failed_when: docker_versions.rc != 0
+      ignore_errors: yes
+      tags:
+        - t5.3
+
+    # Task 5.4: Use VM metadata to pull Docker images for Piwigo and MySQL
+    - name: Pull Docker images
+      become: yes
+      shell: docker pull "{{ item }}"
+      with_items:
+        - "{{ vm_metadata.instance_metadata.piwigo_image }}"
+        - "{{ vm_metadata.instance_metadata.mysql_image }}"
+      tags:
+        - t6
+
+    # Task 5.4: Ensure the Piwigo template is available and copy it to the VM if it's not.
+    - name: Check if Piwigo template exists
+      stat:
+        path: "{{ vm_metadata.instance_metadata.docker_compose_systemd_template }}"
+      register: piwigo_template
+
+    - name: Copy Piwigo template if not already present
+      copy:
+        src: /home/student/project2/docker-compose.service.j2
+        dest: "/etc/systemd/system/docker-compose@piwigo.service"
+      become: yes
+      when: not piwigo_template.stat.exists
+      tags:
+        - docker-compose
+        - t4.2
+
+    # Task 6: Copy Docker Compose file to VM using vm metadata (if appropriate) to assign a valid destination location.
+    - name: Copy Docker Compose file to VM
+      copy:
+        src: "{{ vm_metadata.instance_metadata.docker_compose_file }}"
+        dest: "{{ vm_metadata.instance_metadata.docker_compose_destination }}"
+        remote_user: "{{ vm_metadata.instance_metadata.remote_user }}"
+      tags:
+        - t5
+
+    # Task 8: Use VM metadata (if appropriate) to start Docker containers using Docker Compose.
+    - name: Start Docker containers
+      become: yes
+      shell: docker-compose up -d
+      args:
+        chdir: "{{ vm_metadata.instance_metadata.docker_compose_destination }}"
+      tags:
+        - t7
+
+    # Task 9: Use VM metadata (if appropriate) to enable Docker and Docker Compose services to start on boot.
+    - name: Enable Docker service
+      service:
+        name: docker
+        enabled: yes
+        state: started
+      tags:
+        - docker-compose
+        - t8.1
+
+    - name: Enable Docker Compose service for Piwigo
+      become: yes
+      systemd:
+        name: docker-compose@piwigo
+        enabled: yes
+        state: started
+      tags:
+        - docker-compose
+        - t8.2
+
+
+    # Task 10: Use VM metadata (if appropriate) to install Nginx and configure it as a reverse proxy.
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+      tags:
+        - t9.1
+      
+    - name: Configure Nginx as a reverse proxy
+      template:
+        src: "{{ vm_metadata.instance_metadata.nginx_config_template }}"
+        dest: "{{ vm_metadata.instance_metadata.nginx_config_dest }}"
+      notify: Reload Nginx
+      tags:
+        - t9.2
+      
+    # Task 11: Use VM metadata (if appropriate) to open ports in the firewall
+    - name: Open ports in the firewall
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      with_items:
+        - 80
+        - 443
+      tags:
+        - t11
+
+    # Task 12: Use VM metadata (if appropriate) to wait for Piwigo container to be healthy
+    - name: Wait for Piwigo container to be healthy
+      wait_for:
+        host: "http://{{ vm_metadata.network_interfaces[0].access_configs[0].nat_ip }}:8080"
+        state: started
+        timeout: 100
+      tags:
+        - t12
+
+  handlers:
+    - name: Reload Nginx
+      service:
+        name: nginx
+        state: reloaded
+
